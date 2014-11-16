@@ -37,8 +37,8 @@ import org.apache.hadoop.fs.FileSystem;
 
 public class FrequentItemset {
 	static double s = 0.0;
-	static int total = 0;
-	static int partition = 1;
+	static int totalLineNum = 0;
+	static int partitionNum = 1;
 	static String SET = "set";
 	static String INDEX = "index";
 	@SuppressWarnings("rawtypes")
@@ -69,7 +69,7 @@ public class FrequentItemset {
 			s.add(subset_dictionary);
 			while(!s.isEmpty()){
 				Map temp = new HashMap(s.peek());
-				int n = (int) temp.get(INDEX);
+				int n = (Integer) temp.get(INDEX);
 				if (n < basket.length){
 					subset_temp = new ArrayList<String>((List) temp.get(SET));
 					subset_temp.add(basket[n]);
@@ -83,7 +83,7 @@ public class FrequentItemset {
 					 if (!s.isEmpty()){
 						 temp = new HashMap(s.peek());
 						 s.pop();
-						 int index = (int) temp.get(INDEX);
+						 int index = (Integer) temp.get(INDEX);
 						 index += 1;
 						 temp.put(INDEX, index);
 						 subset_temp = new ArrayList<String>((List) temp.get(SET));
@@ -206,35 +206,36 @@ public class FrequentItemset {
 			while(values.hasNext()){
 				sum += values.next().get();
 			}
-			if (sum >= s*total) output.collect(key, new IntWritable(sum));
+			if (sum >= s*totalLineNum) output.collect(key, new IntWritable(sum));
 		}
 	}
-	//file processing
-	//创建目录
-	public static void mkdir(String path) throws IOException{
+	
+	// Create a directory in the DFS file system
+	public static void mkdir(String dirPath) throws IOException{
         Configuration conf = new Configuration();
         FileSystem fs = FileSystem.get(conf);
-        Path srcPath = new Path(path);
+        Path srcPath = new Path(dirPath);
         boolean isok = fs.mkdirs(srcPath);
         if(isok){
-            System.out.println("create dir ok.");
+            System.out.println("Directory " + dirPath + " created in the DFS.");
         }else{
-            System.out.println("create dir failure.");
+            System.out.println("Failed to create directory in the DFS.");
         }
         fs.close();
     }
-	//创建新文件
-	public static void createFile(String dst , byte[] contents) throws IOException{
+	
+	// Create a file in the DFS file system
+	public static void createFile(String dst, byte[] contents) throws IOException{
         Configuration conf = new Configuration();
         FileSystem fs = FileSystem.get(conf);
-        Path dstPath = new Path(dst); //目标路径
-        //打开一个输出流
+        Path dstPath = new Path(dst);
         FSDataOutputStream outputStream = fs.create(dstPath);	
         outputStream.write(contents);
         outputStream.close();
         fs.close();
-        System.out.println("file "+dst+" create complete.");
+        System.out.println("file "+dst+" created in DFS.");
     }
+	
 	//追加写入文件
 	private static void appendToFile(String dst, String line) throws FileNotFoundException,IOException {
 		  Configuration conf = new Configuration();  
@@ -267,6 +268,7 @@ public class FrequentItemset {
     	System.out.println("Original file reading complete.");
     	return lines;
     }
+    
     //获取文件路径
     public static String getLocation(String path) throws Exception {
         Configuration conf=new Configuration();
@@ -281,6 +283,7 @@ public class FrequentItemset {
         System.out.println("Find input file.");
         return FilePath;
     }
+    
     //删除文件和文件夹
     public static void deleteFile(String fileName) throws IOException {
         Path f = new Path(fileName);
@@ -294,31 +297,30 @@ public class FrequentItemset {
             System.out.println(fileName + "  exist? \t" + isExists);
         }
     }
+    
 	//pre processing
     public static void preprocessingphase1(String[] args)  throws Exception{
     	//making the temp input files.
-    			String originalfilepath = getLocation(args[0]);
-    			System.out.println(originalfilepath);
-    			if (originalfilepath == null) return;
-    			List<String> lines = readFile(originalfilepath);
+    			String originalFilePath = getLocation(args[0]);
+    			System.out.println(originalFilePath);
+    			if (originalFilePath == null) return;
+    			List<String> lines = readFile(originalFilePath);
     			if (lines == null) return;
-    			total = lines.size();
-    			
-    			 partition = Integer.parseInt(args[1]);
-    			int m = (int) total/partition;
-    			double m_d = total*1.0/partition;
-    			if (m_d > m) m = m + 1;
+    			totalLineNum = lines.size();
+    			partitionNum = Integer.parseInt(args[1]);
+    			int lineNumPerPart = (int) Math.ceil((1.0*totalLineNum)/partitionNum);
     			mkdir("input_temp");
-    			for (int i = 0; i < partition; i++){
-    				String newpath = "input_temp/"+i+".dat";
-    				String input_temp = "";
-    				for (int j = 0; j < m && total - i*m - j  > 0; j++){
-    					input_temp += lines.get(i*m+j)+"\n";
+    			for (int currPart = 0; currPart < partitionNum; currPart++){
+    				String partPath = "input_temp/"+currPart+".dat";
+    				String inputFileContents = "";
+    				for (int lineIdx = 0; lineIdx < lineNumPerPart && lineIdx < totalLineNum - currPart*lineNumPerPart; lineIdx++){
+    					inputFileContents += lines.get(currPart*lineNumPerPart+lineIdx)+"\n";
     				}
-    				createFile(newpath, input_temp.getBytes());
-    				//appendToFile(newpath, input_temp);
+    				createFile(partPath, inputFileContents.getBytes());
+    				//appendToFile(newFile, input_temp);
     			}
     }
+    
     //phase 1
     public static void phase1(String[] args) throws Exception{
     	s = Double.parseDouble(args[2]);
