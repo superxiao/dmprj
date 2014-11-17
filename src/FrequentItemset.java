@@ -9,6 +9,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.Stack;
 import java.util.Collections;
+
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.IntWritable;
 import org.apache.hadoop.io.LongWritable;
@@ -24,10 +25,12 @@ import org.apache.hadoop.mapred.Reducer;
 import org.apache.hadoop.mapred.Reporter;
 import org.apache.hadoop.mapred.TextInputFormat;
 import org.apache.hadoop.mapred.TextOutputFormat;
+
 import java.io.BufferedReader;
 import java.io.FileNotFoundException;
 import java.io.InputStreamReader;
 import java.net.URI;
+
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FSDataOutputStream;
@@ -46,104 +49,73 @@ public class FrequentItemset {
 	static List secondphaseset = new ArrayList();
 	
 	// Mapper class for the first phase MapReduce.
+	// Will using static class and members cause re-entrance issue in mapreduce?
 	public static class FirstMap extends MapReduceBase implements Mapper<LongWritable, Text, Text, IntWritable>{
-		static Set set_temp = new HashSet();
-		//using backtracking algorithm to find all the itemsets in one basket
-		public  static void generateitemset_recursive(String[] basket, int p,List temp){
-			for (int i = p; i < basket.length; i++){
-				temp.add(basket[i]);
-				set_temp.add(new ArrayList(temp));
-				generateitemset_recursive(basket, i+1, temp);
-				temp.remove(basket[i]);
-			}
-		}
-		public static void generateitemset_nonrecursive(String[] basket){
-			int p = 0;
-			Stack<Map>s = new Stack<Map>();
-			s.clear();
-			Map subset_dictionary = new HashMap();
-			List<String> subset_temp = new ArrayList<String>();
-			subset_temp.add(basket[p]);
-			set_temp.add(subset_temp);
-			subset_dictionary.put(SET, subset_temp);
-			subset_dictionary.put(INDEX, p+1);
-			s.add(subset_dictionary);
-			while(!s.isEmpty()){
-				Map temp = new HashMap(s.peek());
-				int n = (Integer) temp.get(INDEX);
-				if (n < basket.length){
-					subset_temp = new ArrayList<String>((List) temp.get(SET));
-					subset_temp.add(basket[n]);
-					set_temp.add(subset_temp);
-					temp.put(SET, subset_temp);
-					temp.put(INDEX, n+1);
-					s.push(temp);
-				}else{
-					temp = new HashMap(s.peek());
-					s.pop();
-					 if (!s.isEmpty()){
-						 temp = new HashMap(s.peek());
-						 s.pop();
-						 int index = (Integer) temp.get(INDEX);
-						 index += 1;
-						 temp.put(INDEX, index);
-						 subset_temp = new ArrayList<String>((List) temp.get(SET));
-						 int index2 = subset_temp.size();
-						 subset_temp.remove(index2-1);
-						 subset_temp.add(basket[index-1]);
-						 set_temp.add(subset_temp);
-						 temp.put(SET, subset_temp);
-						 s.add(temp);
-					 }
+		
+		static HashMap<String, Integer> itemToIntTable = new HashMap<String, Integer>();
+		// Possible memory issue with using dynamic array. But we don't know
+		// item numbers up-front.
+		
+		private static List<Integer> getSingletonItemCounts(String[] baskets) {
+			List<Integer> itemCountsTable = new ArrayList<Integer>();
+			int maxItemIdx = 0;
+			for(String basket:baskets) {
+				// Possible empty item for consecutive spaces? May use a token reader
+				String[] items = basket.split(" ");
+				for(String item:items) {
+					if(!itemToIntTable.containsKey(item)){
+						itemToIntTable.put(item, maxItemIdx++);
+						itemCountsTable.add(1);
+					}
+					else {
+						int idx = itemToIntTable.get(item);
+						itemCountsTable.set(idx, itemCountsTable.get(idx)+1);
+					}
 				}
 			}
+			return itemCountsTable;
 		}
 		
-		public void map(LongWritable key, Text value, OutputCollector<Text, IntWritable> output, Reporter reporter) 
-			throws IOException {
-			//split all the baskets in the subfile
-			String data = value.toString();
-			String[] baskets = data.split("\n");
-			int n = baskets.length;
-			//use dictionary to memory the count of <key, value>
-			@SuppressWarnings("rawtypes")
-			Map<List, Integer> itemset_dictionary = new HashMap<List, Integer>();
-			for (int i = 0; i < n; i++){
-				//generate all the itemsets in a basket
-				set_temp.clear();
-				List<String> l = new ArrayList<String>();
-				//recursive function to find all the subsets for a baskets
-				//generateitemset_recursive(baskets[i].split(" "), 0, l);
-				//non recursive function to find all the subsets for a basket
-				generateitemset_nonrecursive(baskets[i].split(" "));
-				@SuppressWarnings("rawtypes")
-				Iterator<List> it = set_temp.iterator();
-				while (it.hasNext()){
-					List list_temp = it.next();
-					if (itemset_dictionary.containsKey(list_temp)){
-						Integer val = itemset_dictionary.get(list_temp)+1;
-						itemset_dictionary.put(list_temp, val);
-					}else{
-						itemset_dictionary.put(list_temp, 1);
-					}
+		private static void convertItemCountTableToIdxTableFor2ndPass(
+				List<Integer> itemCountTable, double countThreshold) {
+			int maxIdx = 1;
+			for(int i = 0; i < itemCountTable.size(); i++) {
+				// >= or >?
+				if(itemCountTable.get(i) >= countThreshold) {
+					itemCountTable.set(i, maxIdx++);
+				}
+				else {
+					itemCountTable.set(i, 0);
 				}
 			}
 			
-			//output the frequent itemsets in one subfile
-			IntWritable one = new IntWritable(1);
-			for (List key_temp: itemset_dictionary.keySet()){
-				int count = (int)itemset_dictionary.get(key_temp);
-				if (count >=supportThreshold*n){
-					String str_temp = "";
-					for (int i = 0; i < key_temp.size(); i++){
-						if (i == 0) str_temp += key_temp.get(i);
-						else str_temp += " "+key_temp.get(i);
-					}
-					Text word = new Text(str_temp);
-					output.collect(word, one);
-					//output.collect(word, new IntWritable(count));
-				}
-			}
+		}
+		
+		public void map(LongWritable key, Text value, OutputCollector<Text, IntWritable> output, Reporter reporter) 
+			throws IOException {			
+			// Possible memory issue here. Might give file name and stream the contents
+			String[] baskets = value.toString().split("\n");
+			int basketNum = baskets.length;
+			double countThreshold = supportThreshold*basketNum;
+			List<Integer> itemCountsTable = getSingletonItemCounts(baskets);
+			convertItemCountTableToIdxTableFor2ndPass(itemCountsTable, countThreshold);
+			List<Integer> idxTableFor2ndPass = itemCountsTable;
+			
+//			//output the frequent itemsets in one subfile
+//			IntWritable one = new IntWritable(1);
+//			for (List key_temp: itemset_dictionary.keySet()){
+//				int count = (int)itemset_dictionary.get(key_temp);
+//				if (count >=supportThreshold*basketNum){
+//					String str_temp = "";
+//					for (int i = 0; i < key_temp.size(); i++){
+//						if (i == 0) str_temp += key_temp.get(i);
+//						else str_temp += " "+key_temp.get(i);
+//					}
+//					Text word = new Text(str_temp);
+//					output.collect(word, one);
+//					//output.collect(word, new IntWritable(count));
+//				}
+//			}
 		}
 	}
 	
@@ -160,6 +132,7 @@ public class FrequentItemset {
 				output.collect(key, new IntWritable(1));
 		}
 	}
+	
 	//the second phase
 	public static class SecondMap extends MapReduceBase implements Mapper<LongWritable, Text, Text, IntWritable>{
 		public void map(LongWritable key, Text value, OutputCollector<Text, IntWritable> output, Reporter reporter)
