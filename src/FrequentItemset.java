@@ -91,6 +91,50 @@ public class FrequentItemset {
 			
 		}
 		
+		private static int getTriangularMatrixIdx(int n, int idxSmaller,
+				int idxBigger){
+			int idx = (idxSmaller-1)*n - ((idxSmaller-1)*idxSmaller)/2 
+					+ idxBigger - idxSmaller;
+			return idx;
+		}
+		
+		private static int[] countPairs(String[] baskets, List<Integer> idxTableFor2ndPass) {
+			int frequentItemsCount = 0;
+			for(Integer entry:idxTableFor2ndPass) {
+				if(entry > 0)
+					frequentItemsCount++;
+			}
+			// Using triangular matrix to count pairs.
+			// Only count pairs whose elements are frequent.
+			int pairNumMax = frequentItemsCount*(frequentItemsCount-1)/2;
+			int[] pairCountTable = new int[pairNumMax];
+
+			for(String basket:baskets) {
+				// Generate a list for frequent items in the basket.
+				String[] items = basket.split(" ");
+				List<Integer> frequentItemsInBasket = new ArrayList<Integer>();
+				for(String item:items) {
+					int idx = itemToIntTable.get(item);
+					if(idxTableFor2ndPass.get(idx) > 0)
+						frequentItemsInBasket.add(idx);
+				}
+				for(int i = 0; i < frequentItemsInBasket.size(); i++) {
+					for(int j = i+1; j < frequentItemsInBasket.size(); j++) {
+						int idxForFirst = frequentItemsInBasket.get(i);
+						int idxForSecond = frequentItemsInBasket.get(j);
+						int idxSmaller = Math.min(idxForFirst, idxForSecond);
+						int idxBigger = Math.max(idxForFirst, idxForSecond);
+						int idxInPairTable = 
+								getTriangularMatrixIdx(
+										frequentItemsCount, 
+										idxSmaller, idxBigger);
+						pairCountTable[idxInPairTable]++;
+					}
+				}
+			}
+			return pairCountTable;
+		}
+		
 		public void map(LongWritable key, Text value, OutputCollector<Text, IntWritable> output, Reporter reporter) 
 			throws IOException {			
 			// Possible memory issue here. Might give file name and stream the contents
