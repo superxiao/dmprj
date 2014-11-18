@@ -10,6 +10,7 @@ import java.util.Set;
 import java.util.Stack;
 import java.util.Collections;
 
+import org.apache.commons.lang.StringUtils;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.IntWritable;
 import org.apache.hadoop.io.LongWritable;
@@ -52,43 +53,45 @@ public class FrequentItemset {
 	// Will using static class and members cause re-entrance issue in mapreduce?
 	public static class FirstMap extends MapReduceBase implements Mapper<LongWritable, Text, Text, IntWritable>{
 		
-		static HashMap<String, Integer> itemToIntTable = new HashMap<String, Integer>();
-		// Possible memory issue with using dynamic array. But we don't know
-		// item numbers up-front.
+		static HashMap<String, Integer> itemCountTable = new HashMap<String, Integer>();
+		static String[] frequentItemTable;
 		
-		private static List<Integer> getSingletonItemCounts(String[] baskets) {
-			List<Integer> itemCountsTable = new ArrayList<Integer>();
-			int maxItemIdx = 0;
+		private static HashMap<String, Integer> getSingletonItemCounts(String[] baskets) {
 			for(String basket:baskets) {
 				// Possible empty item for consecutive spaces? May use a token reader
 				String[] items = basket.split(" ");
 				for(String item:items) {
-					if(!itemToIntTable.containsKey(item)){
-						itemToIntTable.put(item, maxItemIdx++);
-						itemCountsTable.add(1);
+					if(!itemCountTable.containsKey(item)){
+						itemCountTable.put(item, 1);
 					}
 					else {
-						int idx = itemToIntTable.get(item);
-						itemCountsTable.set(idx, itemCountsTable.get(idx)+1);
+						itemCountTable.put(item, itemCountTable.get(item)+1);
 					}
 				}
 			}
-			return itemCountsTable;
+			return itemCountTable;
 		}
 		
-		private static void convertItemCountTableToIdxTableFor2ndPass(
-				List<Integer> itemCountTable, double countThreshold) {
+		private static int convertCountTableToFrequentItemIdxTable(
+				HashMap<String, Integer> itemCountTable, double countThreshold) {
 			int maxIdx = 1;
-			for(int i = 0; i < itemCountTable.size(); i++) {
-				// >= or >?
-				if(itemCountTable.get(i) >= countThreshold) {
-					itemCountTable.set(i, maxIdx++);
-				}
-				else {
-					itemCountTable.set(i, 0);
-				}
+			for(Map.Entry<String, Integer> entry : itemCountTable.entrySet()) {
+				if(entry.getValue() >= countThreshold)
+					entry.setValue(maxIdx++);
+				else
+					entry.setValue(0);
 			}
-			
+			return maxIdx-1;
+		}
+		
+		private String[] getFrequentItemTableFromFrequentItemIdxTable(
+				HashMap<String, Integer> frequentItemIdxTable, int frequentItemCount) {
+			String[] frequentItemTable = new String[frequentItemCount];
+			for(Map.Entry<String, Integer> entry : frequentItemIdxTable.entrySet()) {
+				if(entry.getValue() > 0)
+					frequentItemTable[entry.getValue()-1] = entry.getKey();
+			}
+			return frequentItemTable;
 		}
 		
 		private static int getTriangularMatrixIdx(int n, int idxSmaller,
@@ -98,37 +101,33 @@ public class FrequentItemset {
 			return idx;
 		}
 		
-		private static int[] countPairs(String[] baskets, List<Integer> idxTableFor2ndPass) {
-			int frequentItemsCount = 0;
-			for(Integer entry:idxTableFor2ndPass) {
-				if(entry > 0)
-					frequentItemsCount++;
-			}
-			// Using triangular matrix to count pairs.
-			// Only count pairs whose elements are frequent.
+		private static int[] countPairs(String[] baskets, HashMap<String, Integer> frequentItemIdxTable, int frequentItemsCount) {
+			// Use triangular matrix to count pairs.
+			// Only count pairs whose individual elements are all frequent.
 			int pairNumMax = frequentItemsCount*(frequentItemsCount-1)/2;
 			int[] pairCountTable = new int[pairNumMax];
-
 			for(String basket:baskets) {
 				// Generate a list for frequent items in the basket.
 				String[] items = basket.split(" ");
 				List<Integer> frequentItemsInBasket = new ArrayList<Integer>();
 				for(String item:items) {
-					int idx = itemToIntTable.get(item);
-					if(idxTableFor2ndPass.get(idx) > 0)
+					// The values in frequentItemIdxTable are frequent item indices starting
+					// from 1.
+					int idx = frequentItemIdxTable.get(item);
+					if(idx >= 0)
 						frequentItemsInBasket.add(idx);
 				}
 				for(int i = 0; i < frequentItemsInBasket.size(); i++) {
 					for(int j = i+1; j < frequentItemsInBasket.size(); j++) {
-						int idxForFirst = frequentItemsInBasket.get(i);
-						int idxForSecond = frequentItemsInBasket.get(j);
-						int idxSmaller = Math.min(idxForFirst, idxForSecond);
-						int idxBigger = Math.max(idxForFirst, idxForSecond);
+						int idx1 = frequentItemsInBasket.get(i);
+						int idx2 = frequentItemsInBasket.get(j);
+						int idxSmaller = Math.min(idx1, idx2);
+						int idxBigger = Math.max(idx1, idx2);
 						int idxInPairTable = 
 								getTriangularMatrixIdx(
 										frequentItemsCount, 
 										idxSmaller, idxBigger);
-						pairCountTable[idxInPairTable]++;
+						pairCountTable[idxInPairTable-1]++;
 					}
 				}
 			}
@@ -136,30 +135,41 @@ public class FrequentItemset {
 		}
 		
 		public void map(LongWritable key, Text value, OutputCollector<Text, IntWritable> output, Reporter reporter) 
-			throws IOException {			
-			// Possible memory issue here. Might give file name and stream the contents
+			throws IOException {
+			// System.out.println("Current block is \n" + value.toString());
 			String[] baskets = value.toString().split("\n");
+			
 			int basketNum = baskets.length;
 			double countThreshold = supportThreshold*basketNum;
-			List<Integer> itemCountsTable = getSingletonItemCounts(baskets);
-			convertItemCountTableToIdxTableFor2ndPass(itemCountsTable, countThreshold);
-			List<Integer> idxTableFor2ndPass = itemCountsTable;
-			
-//			//output the frequent itemsets in one subfile
-//			IntWritable one = new IntWritable(1);
-//			for (List key_temp: itemset_dictionary.keySet()){
-//				int count = (int)itemset_dictionary.get(key_temp);
-//				if (count >=supportThreshold*basketNum){
-//					String str_temp = "";
-//					for (int i = 0; i < key_temp.size(); i++){
-//						if (i == 0) str_temp += key_temp.get(i);
-//						else str_temp += " "+key_temp.get(i);
-//					}
-//					Text word = new Text(str_temp);
-//					output.collect(word, one);
-//					//output.collect(word, new IntWritable(count));
-//				}
-//			}
+			HashMap<String, Integer> itemCountTable = getSingletonItemCounts(baskets);
+			// This table starts at 1.
+			int frequentItemCount = convertCountTableToFrequentItemIdxTable(itemCountTable, countThreshold);
+			HashMap<String, Integer> frequentItemIdxTable = itemCountTable;
+			frequentItemTable = getFrequentItemTableFromFrequentItemIdxTable(frequentItemIdxTable, frequentItemCount);
+			int[] pairCounts = countPairs(baskets, frequentItemIdxTable, frequentItemTable.length);
+			// Output the frequent items
+			IntWritable one = new IntWritable(1);
+			for(String frequentItem:frequentItemTable) {
+				System.out.println("Collecting frequent item " + frequentItem);
+				output.collect(new Text(frequentItem), one);
+			}
+			// Output the frequent pairs
+			for(int i = 1; i <= frequentItemTable.length; i++) {
+				for(int j = i+1; j <= frequentItemTable.length; j++) {
+					
+					// System.out.println("Frequent items count is "+frequentItemTable.length + " i is " + i + " j is " + j);
+						
+					int triangleMatrixIdx = getTriangularMatrixIdx(frequentItemTable.length, i, j);
+					System.out.println("Triangle index is " + triangleMatrixIdx);
+					if(pairCounts[triangleMatrixIdx-1] >= countThreshold) {
+						List<String> pairKey = new ArrayList<String>();
+						pairKey.add(frequentItemTable[i-1]);
+						pairKey.add(frequentItemTable[j-1]);
+						Collections.sort(pairKey);
+						output.collect(new Text(StringUtils.join(pairKey, " ")), one);
+					}
+				}
+			}
 		}
 	}
 	
