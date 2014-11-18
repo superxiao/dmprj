@@ -6,9 +6,10 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
-import java.util.Stack;
 import java.util.Collections;
+import java.util.Set;
+import java.util.SortedSet;
+import java.util.TreeSet;
 
 import org.apache.commons.lang.StringUtils;
 import org.apache.hadoop.fs.Path;
@@ -55,6 +56,7 @@ public class FrequentItemset {
 
 		static HashMap<String, Integer> itemCountTable = new HashMap<String, Integer>();
 		static String[] frequentItemTable;
+		static HashMap<String, Integer> frequentItemIdxTable;
 
 		private static HashMap<String, Integer> getSingletonItemCounts(
 				String[] baskets) {
@@ -75,14 +77,14 @@ public class FrequentItemset {
 
 		private static int convertCountTableToFrequentItemIdxTable(
 				HashMap<String, Integer> itemCountTable, double countThreshold) {
-			int maxIdx = 1;
+			int maxIdx = 0;
 			for (Map.Entry<String, Integer> entry : itemCountTable.entrySet()) {
 				if (entry.getValue() >= countThreshold)
 					entry.setValue(maxIdx++);
 				else
-					entry.setValue(0);
+					entry.setValue(-1);
 			}
-			return maxIdx - 1;
+			return maxIdx;
 		}
 
 		private String[] getFrequentItemTableFromFrequentItemIdxTable(
@@ -91,17 +93,21 @@ public class FrequentItemset {
 			String[] frequentItemTable = new String[frequentItemCount];
 			for (Map.Entry<String, Integer> entry : frequentItemIdxTable
 					.entrySet()) {
-				if (entry.getValue() > 0)
-					frequentItemTable[entry.getValue() - 1] = entry.getKey();
+				if (entry.getValue() >= 0)
+					frequentItemTable[entry.getValue()] = entry.getKey();
 			}
 			return frequentItemTable;
 		}
 
 		private static int getTriangularMatrixIdx(int n, int idxSmaller,
 				int idxBigger) {
+			// Convert 0-started index to 1-started
+			idxSmaller++;
+			idxBigger++;
 			int idx = (idxSmaller - 1) * n - ((idxSmaller - 1) * idxSmaller)
 					/ 2 + idxBigger - idxSmaller;
-			return idx;
+			// Convert back
+			return idx - 1;
 		}
 
 		private static int[] countPairs(String[] baskets,
@@ -116,9 +122,6 @@ public class FrequentItemset {
 				String[] items = basket.split(" ");
 				List<Integer> frequentItemsInBasket = new ArrayList<Integer>();
 				for (String item : items) {
-					// The values in frequentItemIdxTable are frequent item
-					// indices starting
-					// from 1.
 					int idx = frequentItemIdxTable.get(item);
 					if (idx >= 0)
 						frequentItemsInBasket.add(idx);
@@ -131,13 +134,83 @@ public class FrequentItemset {
 						int idxBigger = Math.max(idx1, idx2);
 						int idxInPairTable = getTriangularMatrixIdx(
 								frequentItemsCount, idxSmaller, idxBigger);
-						pairCountTable[idxInPairTable - 1]++;
+						pairCountTable[idxInPairTable]++;
 					}
 				}
 			}
 			return pairCountTable;
 		}
-
+		
+		private static SortedSet<Integer> joinSetsWithOneDiff(SortedSet<Integer> set1, SortedSet<Integer> set2) {
+			if(set1.size() != set2.size()) return null;
+			TreeSet<Integer> joined = new TreeSet<Integer>();
+			joined.addAll(set1);
+			joined.addAll(set2);
+			if(joined.size() - set1.size() == 1)
+				return joined;
+			else
+				return null;
+		}
+		
+		private static List<SortedSet<Integer>> getCkPlus1FromLk(List<SortedSet<Integer>> Lk) {
+			HashSet<String> Ckp1Hash = new HashSet<String>();
+			List<SortedSet<Integer>> Ckp1 = new ArrayList<SortedSet<Integer>>();
+			for(int i = 0; i < Lk.size(); i++) {
+				for(int j = i + 1; j < Lk.size(); j++) {
+					SortedSet<Integer> joined = joinSetsWithOneDiff(Lk.get(i), Lk.get(j));
+					if(joined != null){
+						String tripleString = StringUtils.join(joined, " ");
+						if(!Ckp1Hash.contains(tripleString))
+						{
+							Ckp1.add(joined);
+							Ckp1Hash.add(tripleString);
+						}
+					}
+				}
+			}
+			return Ckp1;
+		}
+		
+		private static HashMap<String, Integer> countTriples(String[] baskets, int[] pairCountTable, int frequentItemsCount, double countThreshold) {
+			HashMap<String, Integer> tripleCountTable = new HashMap<String, Integer>();
+			for (String basket : baskets) {
+				// Generate a list for frequent pairs in the basket.
+				String[] items = basket.split(" ");
+				List<Integer> frequentItemsInBasket = new ArrayList<Integer>();
+				for (String item : items) {				
+					int idx = frequentItemIdxTable.get(item);
+					if (idx >= 0)
+						frequentItemsInBasket.add(idx);
+				}
+				List<SortedSet<Integer>> frequentPairsInBasket = new ArrayList<SortedSet<Integer>>();
+				for(int i = 0; i < frequentItemsInBasket.size(); i++) {
+					for(int j = i + 1; j < frequentItemsInBasket.size(); j++) {
+						int idx1 = frequentItemsInBasket.get(i);
+						int idx2 = frequentItemsInBasket.get(j);
+						int idxSmaller = Math.min(idx1, idx2);
+						int idxBigger = Math.max(idx1, idx2);
+						int idxInPairTable = getTriangularMatrixIdx(
+								frequentItemsCount, idxSmaller, idxBigger);
+						if(pairCountTable[idxInPairTable] >= countThreshold) {
+							SortedSet<Integer> pair = new TreeSet<Integer>();
+							pair.add(idxSmaller);
+							pair.add(idxBigger);
+							frequentPairsInBasket.add(pair);
+						}
+					}
+				}
+				List<SortedSet<Integer>> tripleCandidates = getCkPlus1FromLk(frequentPairsInBasket);
+				for(SortedSet<Integer> tripleCandidate:tripleCandidates) {
+					String tripleKey = StringUtils.join(tripleCandidate.toArray(), " ");
+					if(tripleCountTable.containsKey(tripleKey))
+						tripleCountTable.put(tripleKey, tripleCountTable.get(tripleKey)+1);
+					else
+						tripleCountTable.put(tripleKey, 1);
+				}
+			}
+			return tripleCountTable;
+		}
+		
 		public void map(LongWritable key, Text value,
 				OutputCollector<Text, IntWritable> output, Reporter reporter)
 				throws IOException {
@@ -150,20 +223,24 @@ public class FrequentItemset {
 			// This table starts at 1.
 			int frequentItemCount = convertCountTableToFrequentItemIdxTable(
 					itemCountTable, countThreshold);
-			HashMap<String, Integer> frequentItemIdxTable = itemCountTable;
+			frequentItemIdxTable = itemCountTable;
 			frequentItemTable = getFrequentItemTableFromFrequentItemIdxTable(
 					frequentItemIdxTable, frequentItemCount);
 			int[] pairCounts = countPairs(baskets, frequentItemIdxTable,
 					frequentItemTable.length);
+			HashMap<String, Integer> tripleCountTable = countTriples(baskets, pairCounts, frequentItemTable.length, countThreshold);
 			// Output the frequent items
 			IntWritable one = new IntWritable(1);
 			for (String frequentItem : frequentItemTable) {
 				System.out.println("Collecting frequent item " + frequentItem);
+				if(frequentItem == null) {
+					int p = 1;
+				}
 				output.collect(new Text(frequentItem), one);
 			}
 			// Output the frequent pairs
-			for (int i = 1; i <= frequentItemTable.length; i++) {
-				for (int j = i + 1; j <= frequentItemTable.length; j++) {
+			for (int i = 0; i < frequentItemTable.length; i++) {
+				for (int j = i + 1; j < frequentItemTable.length; j++) {
 
 					// System.out.println("Frequent items count is "+frequentItemTable.length
 					// + " i is " + i + " j is " + j);
@@ -172,14 +249,27 @@ public class FrequentItemset {
 							frequentItemTable.length, i, j);
 					System.out
 							.println("Triangle index is " + triangleMatrixIdx);
-					if (pairCounts[triangleMatrixIdx - 1] >= countThreshold) {
+					if (pairCounts[triangleMatrixIdx] >= countThreshold) {
 						List<String> pairKey = new ArrayList<String>();
-						pairKey.add(frequentItemTable[i - 1]);
-						pairKey.add(frequentItemTable[j - 1]);
+						pairKey.add(frequentItemTable[i]);
+						pairKey.add(frequentItemTable[j]);
 						Collections.sort(pairKey);
 						output.collect(
 								new Text(StringUtils.join(pairKey, " ")), one);
 					}
+				}
+			}
+			
+			// Output frequent triples
+			for(Map.Entry<String, Integer> tripleEntry:tripleCountTable.entrySet()) {
+				if(tripleEntry.getValue()>countThreshold) {
+					String[] indices = tripleEntry.getKey().split(" ");
+					List<String> tripleKey = new ArrayList<String>();
+					for(String index:indices) {
+						tripleKey.add(frequentItemTable[Integer.parseInt(index)]);
+					}
+					Collections.sort(tripleKey);
+					output.collect(new Text(StringUtils.join(tripleKey, " ")), one);
 				}
 			}
 		}
