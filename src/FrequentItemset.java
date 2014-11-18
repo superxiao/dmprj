@@ -9,6 +9,7 @@ import java.util.Map;
 import java.util.Collections;
 import java.util.Set;
 import java.util.SortedSet;
+import java.util.Stack;
 import java.util.TreeSet;
 
 import org.apache.commons.lang.StringUtils;
@@ -54,17 +55,18 @@ public class FrequentItemset {
 	public static class FirstMap extends MapReduceBase implements
 			Mapper<LongWritable, Text, Text, IntWritable> {
 
-		static HashMap<String, Integer> itemCountTable = new HashMap<String, Integer>();
 		static String[] frequentItemTable;
 		static HashMap<String, Integer> frequentItemIdxTable;
+		static int[] pairCountTable;
+		static List<HashMap<String, Integer>> itemsetCountTables;
 
 		private static HashMap<String, Integer> getSingletonItemCounts(
-				String[] baskets) {
-			for (String basket : baskets) {
+				List<SortedSet<String>> baskets) {
+			HashMap<String, Integer> itemCountTable = new HashMap<String, Integer>();
+			for (SortedSet<String> basket : baskets) {
 				// Possible empty item for consecutive spaces? May use a token
 				// reader
-				String[] items = basket.split(" ");
-				for (String item : items) {
+				for (String item : basket) {
 					if (!itemCountTable.containsKey(item)) {
 						itemCountTable.put(item, 1);
 					} else {
@@ -110,22 +112,17 @@ public class FrequentItemset {
 			return idx - 1;
 		}
 
-		private static int[] countPairs(String[] baskets,
+		private static int[] countPairs(List<SortedSet<String>> baskets,
 				HashMap<String, Integer> frequentItemIdxTable,
 				int frequentItemsCount) {
+			int p = 1;
 			// Use triangular matrix to count pairs.
 			// Only count pairs whose individual elements are all frequent.
 			int pairNumMax = frequentItemsCount * (frequentItemsCount - 1) / 2;
 			int[] pairCountTable = new int[pairNumMax];
-			for (String basket : baskets) {
+			for (SortedSet<String> basket : baskets) {
 				// Generate a list for frequent items in the basket.
-				String[] items = basket.split(" ");
-				List<Integer> frequentItemsInBasket = new ArrayList<Integer>();
-				for (String item : items) {
-					int idx = frequentItemIdxTable.get(item);
-					if (idx >= 0)
-						frequentItemsInBasket.add(idx);
-				}
+				List<Integer> frequentItemsInBasket = getFrequentItemsIn(basket);
 				for (int i = 0; i < frequentItemsInBasket.size(); i++) {
 					for (int j = i + 1; j < frequentItemsInBasket.size(); j++) {
 						int idx1 = frequentItemsInBasket.get(i);
@@ -134,11 +131,23 @@ public class FrequentItemset {
 						int idxBigger = Math.max(idx1, idx2);
 						int idxInPairTable = getTriangularMatrixIdx(
 								frequentItemsCount, idxSmaller, idxBigger);
+						if(idxInPairTable < 0)
+							p = 1;
 						pairCountTable[idxInPairTable]++;
 					}
 				}
 			}
 			return pairCountTable;
+		}
+		
+		private static List<Integer> getFrequentItemsIn(SortedSet<String> basket) {
+			List<Integer> frequentItems = new ArrayList<Integer>();
+			for (String item : basket) {
+				int idx = frequentItemIdxTable.get(item);
+				if (idx >= 0)
+					frequentItems.add(idx);
+			}
+			return frequentItems;
 		}
 		
 		private static SortedSet<Integer> joinSetsWithOneDiff(SortedSet<Integer> set1, SortedSet<Integer> set2) {
@@ -171,53 +180,88 @@ public class FrequentItemset {
 			return Ckp1;
 		}
 		
-		private static HashMap<String, Integer> countTriples(String[] baskets, int[] pairCountTable, int frequentItemsCount, double countThreshold) {
-			HashMap<String, Integer> tripleCountTable = new HashMap<String, Integer>();
-			for (String basket : baskets) {
-				// Generate a list for frequent pairs in the basket.
-				String[] items = basket.split(" ");
-				List<Integer> frequentItemsInBasket = new ArrayList<Integer>();
-				for (String item : items) {				
-					int idx = frequentItemIdxTable.get(item);
-					if (idx >= 0)
-						frequentItemsInBasket.add(idx);
-				}
-				List<SortedSet<Integer>> frequentPairsInBasket = new ArrayList<SortedSet<Integer>>();
-				for(int i = 0; i < frequentItemsInBasket.size(); i++) {
-					for(int j = i + 1; j < frequentItemsInBasket.size(); j++) {
-						int idx1 = frequentItemsInBasket.get(i);
-						int idx2 = frequentItemsInBasket.get(j);
-						int idxSmaller = Math.min(idx1, idx2);
-						int idxBigger = Math.max(idx1, idx2);
-						int idxInPairTable = getTriangularMatrixIdx(
-								frequentItemsCount, idxSmaller, idxBigger);
-						if(pairCountTable[idxInPairTable] >= countThreshold) {
-							SortedSet<Integer> pair = new TreeSet<Integer>();
-							pair.add(idxSmaller);
-							pair.add(idxBigger);
-							frequentPairsInBasket.add(pair);
-						}
+		private static int getItemsetCount(SortedSet<Integer> itemset, int size) {
+			if(size == 2) {
+				int idxInPairTable = getTriangularMatrixIdx(
+						frequentItemTable.length, itemset.first(), itemset.last());
+				return pairCountTable[idxInPairTable];
+			}
+			else if(size > 2){
+				String key = StringUtils.join(itemset, " ");
+				HashMap<String, Integer> countTable = itemsetCountTables.get(size-1);
+				return countTable.get(key);
+			}
+			return -1;
+		}
+		
+		// Get the list of frequent itemsets of given size in the give list of frequent items.
+		private static void getFrequentItemsetsInAux(List<Integer> frequentItems, int currIdx, 
+				int itemsetSize, Stack<Integer> itemStack, 
+				double countThreshold, List<SortedSet<Integer>> frequentItemsets, HashSet<String> frequentStrItemsets){
+			int currStackSize = itemStack.size();
+			// Base case
+			if(currStackSize == itemsetSize) {
+				SortedSet<Integer> itemsetSorted = new TreeSet<Integer>(itemStack);
+				int count = getItemsetCount(itemsetSorted, itemsetSize);
+				if(count >= countThreshold) {
+					String key = StringUtils.join(itemsetSorted, " ");
+					if(!frequentStrItemsets.contains(key)) {
+						frequentStrItemsets.add(key);
+						frequentItemsets.add(itemsetSorted);
 					}
 				}
-				List<SortedSet<Integer>> tripleCandidates = getCkPlus1FromLk(frequentPairsInBasket);
-				for(SortedSet<Integer> tripleCandidate:tripleCandidates) {
-					String tripleKey = StringUtils.join(tripleCandidate.toArray(), " ");
-					if(tripleCountTable.containsKey(tripleKey))
-						tripleCountTable.put(tripleKey, tripleCountTable.get(tripleKey)+1);
+				return;
+			}
+			// Recursion
+			for(int i = currIdx; i <= frequentItems.size() - itemsetSize + currStackSize; i++) {
+				int item = frequentItems.get(i);
+				itemStack.push(item);
+				getFrequentItemsetsInAux(frequentItems, i+1, itemsetSize, itemStack,
+						countThreshold, frequentItemsets, frequentStrItemsets);
+				itemStack.pop();
+			}
+		}
+		
+		// Get the list of frequent itemsets of given size in the basket.
+		private static List<SortedSet<Integer>> getFrequentItemsetsIn(SortedSet<String> basket, int itemsetSize, double countThreshold) {
+			Stack<Integer> itemStack = new Stack<Integer>();
+			List<SortedSet<Integer>> frequentItemsets = new ArrayList<SortedSet<Integer>>();
+			List<Integer> frequentItemsInBasket = getFrequentItemsIn(basket);
+			HashSet<String> frequentStrItemsets = new HashSet<String>();
+			getFrequentItemsetsInAux(frequentItemsInBasket, 0, itemsetSize, itemStack, countThreshold, frequentItemsets, frequentStrItemsets);
+			return frequentItemsets;
+		}
+		
+		private static HashMap<String, Integer> countItemsetIn(List<SortedSet<String>> baskets, int itemsetSize, double countThreshold) {
+			HashMap<String, Integer> itemsetCountTable = new HashMap<String, Integer>();
+			for(SortedSet<String> basket : baskets) {
+				List<SortedSet<Integer>> frequentItemsetsOf1less = getFrequentItemsetsIn(basket, itemsetSize-1, countThreshold);
+				List<SortedSet<Integer>> candidates = getCkPlus1FromLk(frequentItemsetsOf1less);
+				for(SortedSet<Integer> candidate:candidates) {
+					String key = StringUtils.join(candidate, " ");
+					if(itemsetCountTable.containsKey(key))
+						itemsetCountTable.put(key, itemsetCountTable.get(key)+1);
 					else
-						tripleCountTable.put(tripleKey, 1);
+						itemsetCountTable.put(key, 1);
 				}
 			}
-			return tripleCountTable;
+			return itemsetCountTable;
 		}
 		
 		public void map(LongWritable key, Text value,
 				OutputCollector<Text, IntWritable> output, Reporter reporter)
 				throws IOException {
 			System.out.println("Current block is \n" + value.toString());
-			String[] baskets = value.toString().split("\n");
-
-			int basketNum = baskets.length;
+			String[] lines = value.toString().split("\n");
+			List<SortedSet<String>> baskets = new ArrayList<SortedSet<String>>(lines.length); 
+			for(String line:lines) {
+				String[] basket = line.split(" ");
+				SortedSet<String> basketSet = new TreeSet<String>();
+				for(String item:basket)
+					basketSet.add(item);
+				baskets.add(basketSet);
+			}
+			int basketNum = baskets.size();
 			double countThreshold = supportThreshold * basketNum;
 			HashMap<String, Integer> itemCountTable = getSingletonItemCounts(baskets);
 			// This table starts at 1.
@@ -226,16 +270,24 @@ public class FrequentItemset {
 			frequentItemIdxTable = itemCountTable;
 			frequentItemTable = getFrequentItemTableFromFrequentItemIdxTable(
 					frequentItemIdxTable, frequentItemCount);
-			int[] pairCounts = countPairs(baskets, frequentItemIdxTable,
+			pairCountTable = countPairs(baskets, frequentItemIdxTable,
 					frequentItemTable.length);
-			HashMap<String, Integer> tripleCountTable = countTriples(baskets, pairCounts, frequentItemTable.length, countThreshold);
+			
+			itemsetCountTables = new ArrayList<HashMap<String, Integer>>();
+			itemsetCountTables.add(null);
+			itemsetCountTables.add(null);
+			HashMap<String, Integer> countTable;
+			int itemsetSize = 3;
+			do {
+				countTable = countItemsetIn(baskets, itemsetSize, countThreshold);
+				itemsetCountTables.add(countTable);
+				itemsetSize++;
+			} while(countTable.size() != 0);
+			
 			// Output the frequent items
 			IntWritable one = new IntWritable(1);
 			for (String frequentItem : frequentItemTable) {
 				System.out.println("Collecting frequent item " + frequentItem);
-				if(frequentItem == null) {
-					int p = 1;
-				}
 				output.collect(new Text(frequentItem), one);
 			}
 			// Output the frequent pairs
@@ -249,7 +301,7 @@ public class FrequentItemset {
 							frequentItemTable.length, i, j);
 					System.out
 							.println("Triangle index is " + triangleMatrixIdx);
-					if (pairCounts[triangleMatrixIdx] >= countThreshold) {
+					if (pairCountTable[triangleMatrixIdx] >= countThreshold) {
 						List<String> pairKey = new ArrayList<String>();
 						pairKey.add(frequentItemTable[i]);
 						pairKey.add(frequentItemTable[j]);
@@ -261,15 +313,18 @@ public class FrequentItemset {
 			}
 			
 			// Output frequent triples
-			for(Map.Entry<String, Integer> tripleEntry:tripleCountTable.entrySet()) {
-				if(tripleEntry.getValue()>countThreshold) {
-					String[] indices = tripleEntry.getKey().split(" ");
-					List<String> tripleKey = new ArrayList<String>();
-					for(String index:indices) {
-						tripleKey.add(frequentItemTable[Integer.parseInt(index)]);
+			for(HashMap<String, Integer> itemsetCountTable:itemsetCountTables) {
+				if(itemsetCountTable == null) continue;
+				for(Map.Entry<String, Integer> itemsetEntry:itemsetCountTable.entrySet()) {
+					if(itemsetEntry.getValue()>countThreshold) {
+						String[] indices = itemsetEntry.getKey().split(" ");
+						List<String> itemsetKey = new ArrayList<String>();
+						for(String index:indices) {
+							itemsetKey.add(frequentItemTable[Integer.parseInt(index)]);
+						}
+						Collections.sort(itemsetKey);
+						output.collect(new Text(StringUtils.join(itemsetKey, " ")), one);
 					}
-					Collections.sort(tripleKey);
-					output.collect(new Text(StringUtils.join(tripleKey, " ")), one);
 				}
 			}
 		}
