@@ -36,8 +36,7 @@ import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 
-public class FindingFrequentItemset 
-public class FrequentItemset {
+public class FindingFrequentItemsets {
 	static double supportThreshold = 0.0;
 	static int totalLineNum = 0;
 	static int subfileNum = 1;
@@ -414,17 +413,17 @@ public class FrequentItemset {
     			if (originalfilepath == null) return;
     			List<String> lines = FileProcessing.readFile(originalfilepath);
     			if (lines == null) return;
-    			total = lines.size();
+    			totalLineNum = lines.size();
     			
-    			 partition = Integer.parseInt(args[1]);
-    			int m = (int) total/partition;
-    			double m_d = total*1.0/partition;
+    			 subfileNum = Integer.parseInt(args[1]);
+    			int m = (int) totalLineNum/subfileNum;
+    			double m_d = totalLineNum*1.0/subfileNum;
     			if (m_d > m) m = m + 1;
     			FileProcessing.mkdir("input_temp");
-    			for (int i = 0; i < partition; i++){
+    			for (int i = 0; i < subfileNum; i++){
     				String newpath = "input_temp/"+i+".dat";
     				String input_temp = "";
-    				for (int j = 0; j < m && total - i*m - j  > 0; j++){
+    				for (int j = 0; j < m && totalLineNum - i*m - j  > 0; j++){
     					input_temp += lines.get(i*m+j)+"\n";
     				}
     				FileProcessing.createFile(newpath, input_temp.getBytes());
@@ -571,6 +570,7 @@ public class FrequentItemset {
 			System.out.println("Finalprocess fail");
 			e.printStackTrace();
 		}
+	}
 
 	// phase 1
 	public static void phase1(String[] args) throws Exception {
@@ -604,5 +604,5 @@ public class FrequentItemset {
 		FileOutputFormat.setOutputPath(job, new Path("output"));
 		job.waitForCompletion(true);
 	}
-	}
 }
+
