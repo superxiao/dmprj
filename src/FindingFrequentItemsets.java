@@ -33,18 +33,20 @@ import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
-public class FindingFrequentItemsets{
-	static double s = 0.0;
-	static int total = 0;
-	static int partition = 1;
+
+public class FindingFrequentItemset {
+	static double supportThreshold = 0.0;
+	static int totalLineNum = 0;
+	static int subfileNum = 1;
 	static String SET = "set";
 	static String INDEX = "index";
 	@SuppressWarnings("rawtypes")
 	static List<List> firstphaseset = new ArrayList<List>();
 	static List secondphaseset = new ArrayList();
 	static String [] myargs = null;
-	//the first phase
-	public static class First_Map extends MapReduceBase implements Mapper<LongWritable, Text, Text, IntWritable>{
+	
+	// Mapper class for the first phase MapReduce.
+	public static class FirstMap extends MapReduceBase implements Mapper<LongWritable, Text, Text, IntWritable>{
 		static Set set_temp = new HashSet();
 		//using backtracking algorithm to find all the itemsets in one basket
 		public  static void generateitemset_recursive(String[] basket, int p,List temp){
@@ -68,7 +70,7 @@ public class FindingFrequentItemsets{
 			s.add(subset_dictionary);
 			while(!s.isEmpty()){
 				Map temp = new HashMap(s.peek());
-				int n = (int) temp.get(INDEX);
+				int n = (Integer) temp.get(INDEX);
 				if (n < basket.length){
 					subset_temp = new ArrayList<String>((List) temp.get(SET));
 					subset_temp.add(basket[n]);
@@ -82,7 +84,7 @@ public class FindingFrequentItemsets{
 					 if (!s.isEmpty()){
 						 temp = new HashMap(s.peek());
 						 s.pop();
-						 int index = (int) temp.get(INDEX);
+						 int index = (Integer) temp.get(INDEX);
 						 index += 1;
 						 temp.put(INDEX, index);
 						 subset_temp = new ArrayList<String>((List) temp.get(SET));
@@ -96,6 +98,7 @@ public class FindingFrequentItemsets{
 				}
 			}
 		}
+		
 		public void map(LongWritable key, Text value, OutputCollector<Text, IntWritable> output, Reporter reporter) 
 			throws IOException {
 			//split all the baskets in the subfile
@@ -125,11 +128,12 @@ public class FindingFrequentItemsets{
 					}
 				}
 			}
+			
 			//output the frequent itemsets in one subfile
 			IntWritable one = new IntWritable(1);
 			for (List key_temp: itemset_dictionary.keySet()){
 				int count = (int)itemset_dictionary.get(key_temp);
-				if (count >=s*n){
+				if (count >=supportThreshold*n){
 					String str_temp = "";
 					for (int i = 0; i < key_temp.size(); i++){
 						if (i == 0) str_temp += key_temp.get(i);
@@ -142,7 +146,8 @@ public class FindingFrequentItemsets{
 			}
 		}
 	}
-	public static class First_Reduce extends MapReduceBase implements
+	
+	public static class FirstReduce extends MapReduceBase implements
     Reducer<Text, IntWritable, Text, IntWritable>{
 		public void reduce(Text key, Iterator <IntWritable> values, OutputCollector <Text, IntWritable> output, Reporter reporter)
 			throws IOException{
@@ -156,7 +161,7 @@ public class FindingFrequentItemsets{
 		}
 	}
 	//the second phase
-	public static class Second_Map extends MapReduceBase implements Mapper<LongWritable, Text, Text, IntWritable>{
+	public static class SecondMap extends MapReduceBase implements Mapper<LongWritable, Text, Text, IntWritable>{
 		public void map(LongWritable key, Text value, OutputCollector<Text, IntWritable> output, Reporter reporter)
 				throws IOException {
 			String data = value.toString();
@@ -205,7 +210,7 @@ public class FindingFrequentItemsets{
 			while(values.hasNext()){
 				sum += values.next().get();
 			}
-			if (sum >= s*total) output.collect(key, new IntWritable(sum));
+			if (sum >= supportThreshold*totalLineNum) output.collect(key, new IntWritable(sum));
 		}
 	}
 	
@@ -232,24 +237,27 @@ public class FindingFrequentItemsets{
     				}
     				FileProcessing.createFile(newpath, input_temp.getBytes());
     				//appendToFile(newpath, input_temp);
-    			}
+   			}
     }
+    
     //phase 1
     public static void phase1(String[] args) throws Exception{
-    	s = Double.parseDouble(args[2]);
-		JobConf conf = new JobConf(FindingFrequentItemsets.class);
-		conf.setJobName("Find frequent candidate");
+    	// What's args[2]?
+    	supportThreshold = Double.parseDouble(args[2]);
+		JobConf conf = new JobConf(FrequentItemset.class);
+		conf.setJobName("Finding Frequent Itemsets");
 		conf.setOutputKeyClass(Text.class);
 		conf.setOutputValueClass(IntWritable.class);
-		conf.setMapperClass(First_Map.class);
+		conf.setMapperClass(FirstMap.class);
 		//conf.setCombinerClass(First_Reduce.class);
-		conf.setReducerClass(First_Reduce.class);
+		conf.setReducerClass(FirstReduce.class);
 		conf.setInputFormat(TextInputFormat.class);
 		conf.setOutputFormat(TextOutputFormat.class);
 		FileInputFormat.setInputPaths(conf, new Path("input_temp"));
 		FileOutputFormat.setOutputPath(conf, new Path("output_temp"));
 		JobClient.runJob(conf);
     }
+    
     //pre processing for phase 2
     public static void preprocessingphase2(String[] args) throws Exception{
     	List<String> lines = FileProcessing.readFile("output_temp/part-00000");
@@ -273,7 +281,7 @@ public class FindingFrequentItemsets{
 		conf.setJobName("Frequent Itemsets Count");
 		conf.setOutputKeyClass(Text.class);
 		conf.setOutputValueClass(IntWritable.class);
-		conf.setMapperClass(Second_Map.class);
+		conf.setMapperClass(SecondMap.class);
 		//conf.setCombinerClass(First_Reduce.class);
 		conf.setReducerClass(Second_Reduce.class);
 		FileInputFormat.setInputPaths(conf, new Path("input_temp"));
