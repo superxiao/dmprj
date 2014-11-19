@@ -33,9 +33,7 @@ import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
-
-
-public class FrequentItemset {
+public class FindingFrequentItemsets{
 	static double s = 0.0;
 	static int total = 0;
 	static int partition = 1;
@@ -44,6 +42,7 @@ public class FrequentItemset {
 	@SuppressWarnings("rawtypes")
 	static List<List> firstphaseset = new ArrayList<List>();
 	static List secondphaseset = new ArrayList();
+	static String [] myargs = null;
 	//the first phase
 	public static class First_Map extends MapReduceBase implements Mapper<LongWritable, Text, Text, IntWritable>{
 		static Set set_temp = new HashSet();
@@ -209,98 +208,14 @@ public class FrequentItemset {
 			if (sum >= s*total) output.collect(key, new IntWritable(sum));
 		}
 	}
-	//file processing
-	//创建目录
-	public static void mkdir(String path) throws IOException{
-        Configuration conf = new Configuration();
-        FileSystem fs = FileSystem.get(conf);
-        Path srcPath = new Path(path);
-        boolean isok = fs.mkdirs(srcPath);
-        if(isok){
-            System.out.println("create dir ok.");
-        }else{
-            System.out.println("create dir failure.");
-        }
-        fs.close();
-    }
-	//创建新文件
-	public static void createFile(String dst , byte[] contents) throws IOException{
-        Configuration conf = new Configuration();
-        FileSystem fs = FileSystem.get(conf);
-        Path dstPath = new Path(dst); //目标路径
-        //打开一个输出流
-        FSDataOutputStream outputStream = fs.create(dstPath);	
-        outputStream.write(contents);
-        outputStream.close();
-        fs.close();
-        System.out.println("file "+dst+" create complete.");
-    }
-	//追加写入文件
-	private static void appendToFile(String dst, String line) throws FileNotFoundException,IOException {
-		  Configuration conf = new Configuration();  
-		  FileSystem fs = FileSystem.get(conf); 
-		  FSDataOutputStream outputStream = fs.append(new Path(dst));
-		  outputStream.write(line.getBytes());
-		  /*int readLen = line.getBytes().length;
-		  while(-1 != readLen){
-		  out.write("zhangzk add by hdfs java api".getBytes(), 0, readLen);
-		  }*/
-		  outputStream.close();
-		  fs.close();
-		 }
-	//读取文件的内容
-    public static List<String> readFile(String filePath) throws IOException{
-    	Path f = new Path(filePath);
-    	Configuration conf = new Configuration();
-		FileSystem fs = FileSystem.get(URI.create(filePath), conf);
-    	FSDataInputStream dis = fs.open(f);
-    	InputStreamReader isr = new InputStreamReader(dis, "utf-8");
-    	BufferedReader br = new BufferedReader(isr);
-    	List<String> lines = new ArrayList<String>();
-    	String str = "";
-    	while((str = br.readLine()) !=null){
-    			lines.add(str);
-    	}
-    	br.close();
-    	isr.close();
-    	dis.close();
-    	System.out.println("Original file reading complete.");
-    	return lines;
-    }
-    //获取文件路径
-    public static String getLocation(String path) throws Exception {
-        Configuration conf=new Configuration();
-        FileSystem hdfs=FileSystem.get(conf);
-        Path listf =new Path(path);
-        FileStatus stats[]=hdfs.listStatus(listf);
-        String FilePath = stats[0].getPath().toString();
-        /*for(int i = 0; i < stats.length; ++i){
-        	System.out.println(stats[i].getPath().toString());
-        	}*/
-        hdfs.close();
-        System.out.println("Find input file.");
-        return FilePath;
-    }
-    //删除文件和文件夹
-    public static void deleteFile(String fileName) throws IOException {
-        Path f = new Path(fileName);
-        Configuration conf = new Configuration();
-        FileSystem fs = FileSystem.get(URI.create(fileName), conf);
-        boolean isExists = fs.exists(f);
-        if (isExists) { //if exists, delete
-            boolean isDel = fs.delete(f,true);
-            System.out.println(fileName + "  delete? \t" + isDel);
-        } else {
-            System.out.println(fileName + "  exist? \t" + isExists);
-        }
-    }
+	
 	//pre processing
     public static void preprocessingphase1(String[] args)  throws Exception{
     	//making the temp input files.
-    			String originalfilepath = getLocation(args[0]);
+    			String originalfilepath = FileProcessing.getLocation(args[0]);
     			System.out.println(originalfilepath);
     			if (originalfilepath == null) return;
-    			List<String> lines = readFile(originalfilepath);
+    			List<String> lines = FileProcessing.readFile(originalfilepath);
     			if (lines == null) return;
     			total = lines.size();
     			
@@ -308,21 +223,21 @@ public class FrequentItemset {
     			int m = (int) total/partition;
     			double m_d = total*1.0/partition;
     			if (m_d > m) m = m + 1;
-    			mkdir("input_temp");
+    			FileProcessing.mkdir("input_temp");
     			for (int i = 0; i < partition; i++){
     				String newpath = "input_temp/"+i+".dat";
     				String input_temp = "";
     				for (int j = 0; j < m && total - i*m - j  > 0; j++){
     					input_temp += lines.get(i*m+j)+"\n";
     				}
-    				createFile(newpath, input_temp.getBytes());
+    				FileProcessing.createFile(newpath, input_temp.getBytes());
     				//appendToFile(newpath, input_temp);
     			}
     }
     //phase 1
     public static void phase1(String[] args) throws Exception{
     	s = Double.parseDouble(args[2]);
-		JobConf conf = new JobConf(FrequentItemset.class);
+		JobConf conf = new JobConf(FindingFrequentItemsets.class);
 		conf.setJobName("Find frequent candidate");
 		conf.setOutputKeyClass(Text.class);
 		conf.setOutputValueClass(IntWritable.class);
@@ -337,7 +252,7 @@ public class FrequentItemset {
     }
     //pre processing for phase 2
     public static void preprocessingphase2(String[] args) throws Exception{
-    	List<String> lines = readFile("output_temp/part-00000");
+    	List<String> lines = FileProcessing.readFile("output_temp/part-00000");
     	Iterator<String> itr = lines.iterator();
     	while (itr.hasNext()) {
     	    String basket = (String) itr.next();
@@ -354,7 +269,7 @@ public class FrequentItemset {
     }
     //phase 2
     public static void phase2(String[] args) throws Exception{
-    	JobConf conf = new JobConf(FrequentItemset.class);
+    	JobConf conf = new JobConf(FindingFrequentItemsets.class);
 		conf.setJobName("Frequent Itemsets Count");
 		conf.setOutputKeyClass(Text.class);
 		conf.setOutputValueClass(IntWritable.class);
@@ -421,11 +336,11 @@ public class FrequentItemset {
     	for (int v  = 0; v < k; v ++) secondphaseset.set(left+v, temp.get(v));
     }
     //final process
-    public static void finalprocess() throws Exception{
-    	deleteFile("output_temp");
-    	deleteFile("input_temp");
+    public  static void finalprocess() throws Exception{
+    	FileProcessing.deleteFile("output_temp");
+    	FileProcessing.deleteFile("input_temp");
     	secondphaseset.clear();
-    	List<String> lines = readFile("output/part-00000");
+    	List<String> lines = FileProcessing.readFile("output/part-00000");
     	for (Iterator i = lines.iterator(); i.hasNext();){
     		String str = (String) i.next();
     		List temp = Arrays.asList(str.split("\t"));
@@ -440,27 +355,51 @@ public class FrequentItemset {
     		String str = tmp.get(0)+" ("+tmp.get(1)+")\n";
     		str_finial += str;
     	}
-    	mkdir("result");
+    	FileProcessing.mkdir("result");
     	String str = ""+secondphaseset.size()+"\n";
-    	createFile("result/result.txt", str.getBytes());
-    	appendToFile("result/result.txt",str_finial);
+    	FileProcessing.createFile("result/result.txt", str.getBytes());
+    	FileProcessing.appendToFile("result/result.txt",str_finial);
     	System.out.println("All finished.");
     }
     //main function
-	public static void main(String[] args) throws Exception	{
+	public  void 	run(String[] args){
 		if (args.length < 3){
 			System.out.println("The number of arguments is less than three.");
 			return;
 		}
 		//first phase
-		preprocessingphase1(args);
-		phase1(args);
+		try {
+			preprocessingphase1(args);
+		} catch (Exception e) {
+			System.out.println("Preprccessing Phase 1 fail");
+			e.printStackTrace();
+		}
+		try {
+			phase1(args);
+		} catch (Exception e) {
+			System.out.println("Phase 1 fail");
+			e.printStackTrace();
+		}
 		
 		//second phase
-		preprocessingphase2(args);
-		phase2(args);
-		
+		try {
+			preprocessingphase2(args);
+		} catch (Exception e) {
+			System.out.println("Preprccessing Phase 2 fail");
+			e.printStackTrace();
+		}
+		try {
+			phase2(args);
+		} catch (Exception e) {
+			System.out.println("Phase 2 fail");
+			e.printStackTrace();
+		}
 		//final process
-		finalprocess();
+		try {
+			finalprocess();
+		} catch (Exception e) {
+			System.out.println("Finalprocess fail");
+			e.printStackTrace();
+		}
 	}
 }
