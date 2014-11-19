@@ -17,17 +17,13 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.IntWritable;
 import org.apache.hadoop.io.LongWritable;
 import org.apache.hadoop.io.Text;
-import org.apache.hadoop.mapred.FileInputFormat;
-import org.apache.hadoop.mapred.FileOutputFormat;
-import org.apache.hadoop.mapred.JobClient;
-import org.apache.hadoop.mapred.JobConf;
-import org.apache.hadoop.mapred.MapReduceBase;
-import org.apache.hadoop.mapred.Mapper;
-import org.apache.hadoop.mapred.OutputCollector;
-import org.apache.hadoop.mapred.Reducer;
-import org.apache.hadoop.mapred.Reporter;
-import org.apache.hadoop.mapred.TextInputFormat;
-import org.apache.hadoop.mapred.TextOutputFormat;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.Mapper;
+import org.apache.hadoop.mapreduce.Reducer;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.input.TextInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+import org.apache.hadoop.mapreduce.lib.output.TextOutputFormat;
 
 import java.io.BufferedReader;
 import java.io.FileNotFoundException;
@@ -52,7 +48,7 @@ public class FrequentItemset {
 
 	// Mapper class for the first phase MapReduce.
 	// Will using static class and members cause re-entrance issue in mapreduce?
-	public static class FirstMap extends MapReduceBase implements
+	public static class FirstMap extends
 			Mapper<LongWritable, Text, Text, IntWritable> {
 
 		static String[] frequentItemTable;
@@ -249,8 +245,8 @@ public class FrequentItemset {
 		}
 		
 		public void map(LongWritable key, Text value,
-				OutputCollector<Text, IntWritable> output, Reporter reporter)
-				throws IOException {
+				Context output)
+				throws IOException, InterruptedException {
 			System.out.println("Current block is \n" + value.toString());
 			String[] lines = value.toString().split("\n");
 			List<SortedSet<String>> baskets = new ArrayList<SortedSet<String>>(lines.length); 
@@ -288,7 +284,7 @@ public class FrequentItemset {
 			IntWritable one = new IntWritable(1);
 			for (String frequentItem : frequentItemTable) {
 				System.out.println("Collecting frequent item " + frequentItem);
-				output.collect(new Text(frequentItem), one);
+				output.write(new Text(frequentItem), one);
 			}
 			// Output the frequent pairs
 			for (int i = 0; i < frequentItemTable.length; i++) {
@@ -306,7 +302,7 @@ public class FrequentItemset {
 						pairKey.add(frequentItemTable[i]);
 						pairKey.add(frequentItemTable[j]);
 						Collections.sort(pairKey);
-						output.collect(
+						output.write(
 								new Text(StringUtils.join(pairKey, " ")), one);
 					}
 				}
@@ -323,34 +319,34 @@ public class FrequentItemset {
 							itemsetKey.add(frequentItemTable[Integer.parseInt(index)]);
 						}
 						Collections.sort(itemsetKey);
-						output.collect(new Text(StringUtils.join(itemsetKey, " ")), one);
+						output.write(new Text(StringUtils.join(itemsetKey, " ")), one);
 					}
 				}
 			}
 		}
 	}
 
-	public static class FirstReduce extends MapReduceBase implements
+	public static class FirstReduce extends 
 			Reducer<Text, IntWritable, Text, IntWritable> {
 		public void reduce(Text key, Iterator<IntWritable> values,
-				OutputCollector<Text, IntWritable> output, Reporter reporter)
-				throws IOException {
+				Context output)
+				throws IOException, InterruptedException {
 			int sum = 0;
 			while (values.hasNext()) {
 				sum += values.next().get();
 				// values.next().get();
 			}
 			// output.collect(key, new IntWritable(sum));
-			output.collect(key, new IntWritable(1));
+			output.write(key, new IntWritable(1));
 		}
 	}
 
 	// the second phase
-	public static class SecondMap extends MapReduceBase implements
+	public static class SecondMap extends
 			Mapper<LongWritable, Text, Text, IntWritable> {
 		public void map(LongWritable key, Text value,
-				OutputCollector<Text, IntWritable> output, Reporter reporter)
-				throws IOException {
+				Context output)
+				throws IOException, InterruptedException {
 			String data = value.toString();
 			String[] baskets = data.split("\n");
 			int n = baskets.length;
@@ -388,22 +384,22 @@ public class FrequentItemset {
 						str_temp += " " + candidate.get(i);
 				}
 				Text set = new Text(str_temp);
-				output.collect(set, new IntWritable(count));
+				output.write(set, new IntWritable(count));
 			}
 		}
 	}
 
-	public static class Second_Reduce extends MapReduceBase implements
+	public static class Second_Reduce extends
 			Reducer<Text, IntWritable, Text, IntWritable> {
 		public void reduce(Text key, Iterator<IntWritable> values,
-				OutputCollector<Text, IntWritable> output, Reporter reporter)
-				throws IOException {
+				Context output)
+				throws IOException, InterruptedException {
 			int sum = 0;
 			while (values.hasNext()) {
 				sum += values.next().get();
 			}
 			if (sum >= supportThreshold * totalLineNum)
-				output.collect(key, new IntWritable(sum));
+				output.write(key, new IntWritable(sum));
 		}
 	}
 
@@ -532,23 +528,24 @@ public class FrequentItemset {
 	public static void phase1(String[] args) throws Exception {
 		// What's args[2]?
 		supportThreshold = Double.parseDouble(args[2]);
-		JobConf conf = new JobConf(FrequentItemset.class);
-		conf.setJobName("Finding Frequent Itemsets");
-		conf.setOutputKeyClass(Text.class);
-		conf.setOutputValueClass(IntWritable.class);
-		conf.setMapperClass(FirstMap.class);
+		Configuration conf = new Configuration();
+		Job job = Job.getInstance(conf, "Finding Frequent Itemsets");
+		job.setOutputKeyClass(Text.class);
+		job.setOutputValueClass(IntWritable.class);
+		job.setMapperClass(FirstMap.class);
 		// conf.setCombinerClass(First_Reduce.class);
-		conf.setReducerClass(FirstReduce.class);
-		conf.setInputFormat(TextInputFormat.class);
-		conf.setOutputFormat(TextOutputFormat.class);
-		FileInputFormat.setInputPaths(conf, new Path("input_temp"));
-		FileOutputFormat.setOutputPath(conf, new Path("output_temp"));
-		JobClient.runJob(conf);
+		job.setReducerClass(FirstReduce.class);
+		job.setInputFormatClass(TextInputFormatWithWholeFileRecords.class);
+		job.setOutputFormatClass(TextOutputFormat.class);
+		FileInputFormat.setInputPaths(job, new Path("input_temp"));
+		FileOutputFormat.setOutputPath(job, new Path("output_temp"));
+		job.waitForCompletion(true);
 	}
+	
 
 	// pre processing for phase 2
 	public static void preprocessingphase2(String[] args) throws Exception {
-		List<String> lines = readFile("output_temp/part-00000");
+		List<String> lines = readFile("output_temp/part-r-00000");
 		Iterator<String> itr = lines.iterator();
 		while (itr.hasNext()) {
 			String basket = (String) itr.next();
@@ -566,16 +563,17 @@ public class FrequentItemset {
 
 	// phase 2
 	public static void phase2(String[] args) throws Exception {
-		JobConf conf = new JobConf(FrequentItemset.class);
-		conf.setJobName("Frequent Itemsets Count");
-		conf.setOutputKeyClass(Text.class);
-		conf.setOutputValueClass(IntWritable.class);
-		conf.setMapperClass(SecondMap.class);
+		Configuration conf = new Configuration();
+		Job job = Job.getInstance(conf, "Finding Frequent Itemsets");
+		job.setJobName("Frequent Itemsets Count");
+		job.setOutputKeyClass(Text.class);
+		job.setOutputValueClass(IntWritable.class);
+		job.setMapperClass(SecondMap.class);
 		// conf.setCombinerClass(First_Reduce.class);
-		conf.setReducerClass(Second_Reduce.class);
-		FileInputFormat.setInputPaths(conf, new Path("input_temp"));
-		FileOutputFormat.setOutputPath(conf, new Path("output"));
-		JobClient.runJob(conf);
+		job.setReducerClass(Second_Reduce.class);
+		FileInputFormat.setInputPaths(job, new Path("input_temp"));
+		FileOutputFormat.setOutputPath(job, new Path("output"));
+		job.waitForCompletion(true);
 	}
 
 	// the merge sort procedure
@@ -656,7 +654,7 @@ public class FrequentItemset {
 		deleteFile("output_temp");
 		deleteFile("input_temp");
 		secondphaseset.clear();
-		List<String> lines = readFile("output/part-00000");
+		List<String> lines = readFile("output/part-r-00000");
 		for (Iterator i = lines.iterator(); i.hasNext();) {
 			String str = (String) i.next();
 			List temp = Arrays.asList(str.split("\t"));
