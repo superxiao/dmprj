@@ -1,4 +1,6 @@
 import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileReader;
 import java.io.IOException;
@@ -67,15 +69,16 @@ public class FileProcessing {
 	    	System.out.println("Original file reading complete.");
 	    	return lines;
 	    }
-	    public static List readLocalFile(String path) throws IOException{
-	    	BufferedReader br = new BufferedReader(new FileReader(path));  
-	    	List <String> lines = new ArrayList<String>();
-	    	do{
-	    		String data = br.readLine();
-	    		if (data == null) break;
-	    		lines.add(data);
-	    	}while(true);
-	    	return lines;
+	    public static byte[] readLocalFile(String path) throws IOException{
+	    	//BufferedReader br = new BufferedReader(new FileReader(path)); 
+	    	//List <String> lines = new ArrayList<String>();
+	    	File file = new File(path);
+	    	FileInputStream fis = new FileInputStream(file);
+	    	byte[] data = new byte[(int)file.length()];
+	    	fis.read(data);
+	        fis.close();
+	        return data;
+	    	//return ;
 	    }
 	    //获取文件路径
 	    public static String getLocation(String path) throws Exception {
@@ -108,14 +111,15 @@ public class FileProcessing {
 	        }
 	    }
 	    public static void upload(String path) throws IOException{
-	    	List localdata = readLocalFile(path);
+	    	/*List localdata = readLocalFile(path);
 	    	String data = "";
 	    	int n = localdata.size();
 	    	for (int i = 0; i < n; i ++){
 	    		data += localdata.get(i)+"\n";
-	    	}
+	    	}*/
+	    	byte [] data = readLocalFile(path);
 	    	mkdir("input");
-	    	createFile("input/data.txt", data.getBytes());
+	    	createFile("input/data.txt", data);
 	    }
 	    public static void clean() throws IOException {
 	    	deleteFile("input_temp");
