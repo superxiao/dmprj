@@ -164,7 +164,7 @@ public class GUI {
         textarea = new JTextArea(); 
         textarea.setEditable(false);	
         textarea.setRows(25);
-        textarea.setColumns(68);
+        textarea.setColumns(60);
         textarea.setAutoscrolls(true);
         textarea.setLineWrap(true);
         JScrollPane pane = new JScrollPane(textarea);

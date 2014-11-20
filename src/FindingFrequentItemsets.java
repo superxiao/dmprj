@@ -9,7 +9,6 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Collections;
-import java.util.Set;
 import java.util.SortedSet;
 import java.util.Stack;
 import java.util.TreeSet;
@@ -24,21 +23,10 @@ import org.apache.hadoop.mapreduce.Job;
 import org.apache.hadoop.mapreduce.Mapper;
 import org.apache.hadoop.mapreduce.Reducer;
 import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
-import org.apache.hadoop.mapreduce.lib.input.TextInputFormat;
-import org.apache.hadoop.mapreduce.lib.join.Parser.StrToken;
 import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
 import org.apache.hadoop.mapreduce.lib.output.TextOutputFormat;
 
-import java.io.BufferedReader;
-import java.io.FileNotFoundException;
-import java.io.InputStreamReader;
-import java.net.URI;
-
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.FSDataInputStream;
-import org.apache.hadoop.fs.FSDataOutputStream;
-import org.apache.hadoop.fs.FileStatus;
-import org.apache.hadoop.fs.FileSystem;
 
 public class FindingFrequentItemsets {
 	static double supportThreshold = 0.0;
@@ -47,8 +35,8 @@ public class FindingFrequentItemsets {
 	static String SET = "set";
 	static String INDEX = "index";
 	@SuppressWarnings("rawtypes")
-	static List<List<String>> firstphaseset = new ArrayList<List<String>>();
 	static List secondphaseset = new ArrayList();
+	static HashSet<SortedSet<String>> secondPhaseCandidates;
 	static String [] myargs = null;
 	
 
@@ -117,7 +105,6 @@ public class FindingFrequentItemsets {
 		private static int[] countPairs(List<HashSet<String>> baskets,
 				HashMap<String, Integer> frequentItemIdxTable,
 				int frequentItemsCount) {
-			int p = 1;
 			// Use triangular matrix to count pairs.
 			// Only count pairs whose individual elements are all frequent.
 			int pairNumMax = frequentItemsCount * (frequentItemsCount - 1) / 2;
@@ -133,8 +120,6 @@ public class FindingFrequentItemsets {
 						int idxBigger = Math.max(idx1, idx2);
 						int idxInPairTable = getTriangularMatrixIdx(
 								frequentItemsCount, idxSmaller, idxBigger);
-						if(idxInPairTable < 0)
-							p = 1;
 						pairCountTable[idxInPairTable]++;
 					}
 				}
@@ -152,17 +137,6 @@ public class FindingFrequentItemsets {
 			return frequentItems;
 		}
 		
-		private static SortedSet<Integer> joinSetsWithOneDiff(SortedSet<Integer> sortedSet, SortedSet<Integer> sortedSet2) {
-			if(sortedSet.size() != sortedSet2.size()) return null;
-			SortedSet<Integer> joined = new TreeSet<Integer>();
-			joined.addAll(sortedSet);
-			joined.addAll(sortedSet2);
-			if(joined.size() - sortedSet.size() == 1)
-				return joined;
-			else
-				return null;
-		}
-		
 		private static String formStrKeyFromItemset(Collection<Integer> itemset) {
 			Integer[] itemsetArr = itemset.toArray(new Integer[itemset.size()]);
 			Arrays.sort(itemsetArr);
@@ -170,28 +144,28 @@ public class FindingFrequentItemsets {
 			
 		}
 		
-		private static List<SortedSet<Integer>> getCkPlus1FromLk(List<SortedSet<Integer>> frequentItemsetsOf1less) {
-			HashMap<SortedSet<Integer>, SortedSet<Integer>> LkMap = new HashMap<SortedSet<Integer>, SortedSet<Integer>>();
-			for(SortedSet<Integer> itemset:frequentItemsetsOf1less) {
-				SortedSet<Integer> key = new TreeSet<Integer>(itemset);
-				int last = key.last();
+		public static <T extends Comparable<T>> List<SortedSet<T>> getCkPlus1FromLk(List<SortedSet<T>> frequentItemsetsOf1less) {
+			HashMap<SortedSet<T>, SortedSet<T>> LkMap = new HashMap<SortedSet<T>, SortedSet<T>>();
+			for(SortedSet<T> itemset:frequentItemsetsOf1less) {
+				SortedSet<T> key = new TreeSet<T>(itemset);
+				T last = key.last();
 				key.remove(key.last());
 				if(LkMap.containsKey(key))
 					LkMap.get(key).add(last);
 				else {
-					SortedSet<Integer> value = new TreeSet<Integer>();
+					SortedSet<T> value = new TreeSet<T>();
 					value.add(last);
 					LkMap.put(key, value);
 				}
 			}
-			List<SortedSet<Integer>> Ckp1 = new ArrayList<SortedSet<Integer>>();
-			for(Map.Entry<SortedSet<Integer>, SortedSet<Integer>> entry:LkMap.entrySet()) {
-				Integer[] lastSet = entry.getValue().toArray(new Integer[entry.getValue().size()]);
-				for(int i = 0; i < lastSet.length; i++){
-					for(int j = i+1; j < lastSet.length; j++) {
-						SortedSet<Integer> candidate = new TreeSet<Integer>(entry.getKey());
-						candidate.add(lastSet[i]);
-						candidate.add(lastSet[j]);
+			List<SortedSet<T>> Ckp1 = new ArrayList<SortedSet<T>>();
+			for(Map.Entry<SortedSet<T>, SortedSet<T>> entry:LkMap.entrySet()) {
+				List<T> lastSet = new ArrayList<T>(entry.getValue());
+				for(int i = 0; i < lastSet.size(); i++){
+					for(int j = i+1; j < lastSet.size(); j++) {
+						SortedSet<T> candidate = new TreeSet<T>(entry.getKey());
+						candidate.add(lastSet.get(i));
+						candidate.add(lastSet.get(j));
 						Ckp1.add(candidate);
 					}
 				}
@@ -273,9 +247,7 @@ public class FindingFrequentItemsets {
 		
 		private static HashMap<String, Integer> countItemsetIn(List<HashSet<String>> baskets, int itemsetSize, double countThreshold) {
 			HashMap<String, Integer> itemsetCountTable = new HashMap<String, Integer>();
-			int basketCount = 0;
 			for(HashSet<String> basket : baskets) {
-				basketCount++;
 				List<SortedSet<Integer>> frequentItemsetsOf1less = getFrequentItemsetsIn(basket, itemsetSize-1, countThreshold);
 				List<SortedSet<Integer>> candidates = getCkPlus1FromLk(frequentItemsetsOf1less);
 				for(SortedSet<Integer> candidate:candidates) {
@@ -378,12 +350,6 @@ public class FindingFrequentItemsets {
 		public void reduce(Text key, Iterable<IntWritable> values,
 				Context output)
 				throws IOException, InterruptedException {
-			int sum = 0;
-			for (IntWritable value:values) {
-				sum += value.get();
-				// values.next().get();
-			}
-			// output.collect(key, new IntWritable(sum));
 			output.write(key, new IntWritable(1));
 		}
 	}
@@ -392,42 +358,74 @@ public class FindingFrequentItemsets {
 	public static class SecondMap extends
 			Mapper<LongWritable, Text, Text, IntWritable> {
 		
+		private static List<SortedSet<String>> getCandidateSingleItemsInBasket(List<String> basket) {
+			List<SortedSet<String>> candidates = new ArrayList<SortedSet<String>>();
+			for(String item:basket) {
+				SortedSet<String> itemset = new TreeSet<String>();
+				itemset.add(item);
+				if(secondPhaseCandidates.contains(itemset))
+					candidates.add(itemset);
+			}
+			return candidates;
+		}
+		
+		private static List<SortedSet<String>> getCandidateItemsetsInBasket(List<String> basket) {
+			List<SortedSet<String>> candidateItemsets = new ArrayList<SortedSet<String>>();
+			List<SortedSet<String>> candidateSingles = getCandidateSingleItemsInBasket(basket);
+			candidateItemsets.addAll(candidateSingles);
+			List<SortedSet<String>> candidatePairs = new ArrayList<SortedSet<String>>();
+			for(int i = 0; i < candidateSingles.size(); i++) {
+				for(int j = i + 1; j < candidateSingles.size(); j++) {
+					SortedSet<String> pair = new TreeSet<String>();
+					pair.add(candidateSingles.get(i).first());
+					pair.add(candidateSingles.get(j).first());
+					if(secondPhaseCandidates.contains(pair)) {
+						candidateItemsets.add(pair);
+						candidatePairs.add(pair);
+					}
+				}
+			}
+			List<SortedSet<String>> candidateKs = candidatePairs;
+			while(candidateKs.size() != 0) {
+				candidateKs =  FirstMap.getCkPlus1FromLk(candidateKs);
+				List<SortedSet<String>> filteredCandidateKs = new ArrayList<SortedSet<String>>();
+				for(SortedSet<String> candidate:candidateKs) {
+					if(secondPhaseCandidates.contains(candidate)) {
+						candidateItemsets.add(candidate);
+						filteredCandidateKs.add(candidate);
+					}
+					candidateKs = filteredCandidateKs;
+				}
+			}
+			
+			return candidateItemsets;
+		}
+		
 		@Override
 		public void map(LongWritable key, Text value,
 				Context output)
 				throws IOException, InterruptedException {
-			String data = value.toString();
-			String[] baskets = data.split("\n");
+			String[] baskets = value.toString().split("\n");
 			int n = baskets.length;
-			List<String> basket_set = new ArrayList<String>();
-			Map<List, Integer> frequent_itemset_count = new HashMap<List, Integer>();
+			List<String> basket = new ArrayList<String>();
+			Map<SortedSet<String>, Integer> candidateCountTable = new HashMap<SortedSet<String>, Integer>();
 			// using two loops to count the frequent of every candidate subset.
 			for (int i = 0; i < n; i++) {
-				basket_set = new StrTokenizer(baskets[i]).getTokenList();
-				for (List<String> itemset:firstphaseset) {
-					//HashSet<String> imtemsetHash = new HashSet<String>(basket_set);
-					if (basket_set.containsAll(itemset)) {
-						if (frequent_itemset_count.containsKey(itemset)) {
-							Integer v = frequent_itemset_count.get(itemset);
-							v += 1;
-							frequent_itemset_count.put(itemset, v);
-						} else {
-							frequent_itemset_count.put(itemset, new Integer(1));
-						}
+				basket = new StrTokenizer(baskets[i]).getTokenList();
+				List<SortedSet<String>> candidatesInBasket = getCandidateItemsetsInBasket(basket);
+				for (SortedSet<String> candidate:candidatesInBasket) {	
+					if (candidateCountTable.containsKey(candidate)) {
+						Integer count = candidateCountTable.get(candidate);
+						count += 1;
+						candidateCountTable.put(candidate, count);
+					} else {
+						candidateCountTable.put(candidate, 1);
 					}
 				}
 			}
-			for (List candidate : frequent_itemset_count.keySet()) {
-				String str_temp = "";
-				int m = candidate.size();
-				int count = frequent_itemset_count.get(candidate);
-				for (int i = 0; i < m; i++) {
-					if (i == 0)
-						str_temp += candidate.get(i);
-					else
-						str_temp += " " + candidate.get(i);
-				}
-				Text set = new Text(str_temp);
+			for (SortedSet<String> candidate : candidateCountTable.keySet()) {
+				int count = candidateCountTable.get(candidate);
+				Text set = new Text(StringUtils.join(candidate, " "));
 				output.write(set, new IntWritable(count));
 			}
 		}
@@ -470,27 +468,24 @@ public class FindingFrequentItemsets {
     					input_temp.append(lines.get(i*m+j)).append("\n");
     				}
     				FileProcessing.createFile(newpath, input_temp.toString().getBytes());
-    				//appendToFile(newpath, input_temp);
-   			}
+    		}
     }
     
     //pre processing for phase 2
     public static void preprocessingphase2() throws Exception{
-    	firstphaseset.clear();
+    	secondPhaseCandidates = new HashSet<SortedSet<String>>(); 
     	List<String> lines = FileProcessing.readFile("output_temp/part-r-00000");
     	for(String line:lines) {
     		List<String> itemset = new StrTokenizer(line).getTokenList();
     		itemset.remove(itemset.size()-1);
-    		firstphaseset.add(itemset);
+    		secondPhaseCandidates.add(new TreeSet<String>(itemset));	
     	}
-    	//System.out.println(firstphaseset);
     	System.out.println("Pre processing for phase 2 finished.");
     }
+    
     //final process
     public  static void finalprocess() throws Exception{
-    	//FileProcessing.deleteFile("output_temp");
-    	//FileProcessing.deleteFile("input_temp");
-    	secondphaseset.clear();
+       	secondphaseset.clear();
     	List<String> lines = FileProcessing.readFile("output/part-r-00000");
     	for (Iterator i = lines.iterator(); i.hasNext();){
     		String str = (String) i.next();
@@ -571,7 +566,6 @@ public class FindingFrequentItemsets {
 
 	// phase 1
 	public static void phase1(String[] args) throws Exception {
-		// What's args[2]?
 		supportThreshold = Double.parseDouble(args[2]);
 		Configuration conf = new Configuration();
 		Job job = Job.getInstance(conf, "Finding Frequent Itemsets");
