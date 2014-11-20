@@ -13,24 +13,6 @@ import java.util.List;
 import javax.swing.*;
 import javax.swing.text.JTextComponent;
 
-class GUIPrintStream1 extends PrintStream{
-    private JTextComponent component;
-    private StringBuffer sb = new StringBuffer();
-    public GUIPrintStream1(OutputStream out, JTextComponent component){
-        super(out);
-        this.component = component;
-    }
-    @Override
-    public void write(byte[] buf, int off, int len) {
-        final String message = new String(buf, off, len); 
-        SwingUtilities.invokeLater(new Runnable(){
-            public void run(){
-                sb.append(message);
-                component.setText(sb.toString());
-            }
-        });
-    }
-}
 class GUIPrintStream extends PrintStream{
     private JTextArea component;
     private StringBuffer sb = new StringBuffer();
